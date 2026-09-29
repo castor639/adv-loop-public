@@ -1,6 +1,6 @@
 # Literature Review: Radical thinkers and unconventional problem solving, applied to ADV Loop
 
-Compiled 2026-09-07. Three parallel searches: the Firecrawl paper index (PubMed, PMC, bioRxiv, medRxiv, arXiv), general web search, and direct scrapes of essays and blogs. Roughly ninety sources kept. Ids of the form `arxiv:`, `pmid:`, `pmcid:` are index ids and were checked with `firecrawl research inspect-paper`; see "Id verification" at the end for the ones that did not resolve.
+Compiled 2026-09-07 from three kinds of search: a paper index covering PubMed, PMC, bioRxiv, medRxiv, and arXiv, general web search, and direct reads of essays and blogs. Roughly ninety sources kept. Ids of the form `arxiv:`, `pmid:`, `pmcid:` are paper index ids; see "Id verification" at the end.
 
 Labels used per entry: **[journal]** means a peer-reviewed venue or a PMC-indexed copy exists; **[preprint]** means arXiv only, venue unverified; **[essay]** means a book, talk, or blog post. arXiv ids beginning `26` are months old at most and should be treated as unvetted.
 
@@ -8,7 +8,7 @@ Labels used per entry: **[journal]** means a peer-reviewed venue or a PMC-indexe
 
 The question was whether the pattern behind "radical thinkers", people who take approaches far outside the ordinary and solve problems nobody else could, can be built into an automated research loop. The literature answers in three layers. The science-of-science layer says breakthroughs are not random novelty: they have a conventional core plus one genuinely distant element, they come disproportionately from outsiders and small teams drawing on older and less popular ideas, and they are systematically under-rewarded by reviewers and by expected-value ranking. The cognitive layer says the thing that unblocks a stuck solver is a change of *representation*, not a change of method: relaxing a self-imposed constraint, decomposing a chunk, renaming entities in function-free terms. Fixation is an attention effect that persists even when the solver sincerely believes it is searching for alternatives, and language models show the same Einstellung effect. The agent-systems layer says LLM loops converge on the median idea because of a data-level typicality bias, that temperature does not fix it, that fresh context does remove intra-context fixation, and that novelty must be measured at the strategy level because surface diversity collapses to recurring patterns. The strongest agent-side results reward behavioral novelty or Bayesian surprise instead of the objective, branch from non-best ancestors, and score a lineage by its descendants.
 
-ADV Loop already implements a surprising amount of this structurally: strategy fingerprints that can never recur, fresh minimal context for ideation, a critic in a different context, basins with representation-shift re-entry, a cyclic escalation ladder, a lessons ledger, and a proves-too-much control. The gaps are specific. The engine cannot check that a declared representation shift is real. Nothing models the *expected* set of approaches so seeds are novel only relative to history. Triage debate is symmetric. The `combine` move enforces pair novelty but not distance. Candidate selection is greedy on the candidate's own Elo. There is no protected budget for low-scoring branches. The evidence came from one long proof workspace: 39 attempts, failure streak 7, every escalation rung fired, and five critic-verified closure theorems that all established the same limit of a single method family. The loop exhausted a method class without ever leaving it. That is the failure the whole literature describes.
+ADV Loop already implements a surprising amount of this structurally: strategy fingerprints that can never recur, fresh minimal context for ideation, a critic in a different context, basins with representation-shift re-entry, a cyclic escalation ladder, a lessons ledger, and a proves-too-much control. The gaps are specific. The engine cannot check that a declared representation shift is real. Nothing models the *expected* set of approaches so seeds are novel only relative to history. Triage debate is symmetric. The `combine` move enforces pair novelty but not distance. Candidate selection is greedy on the candidate's own Elo. There is no protected budget for low-scoring branches. Together they let a loop exhaust one method class without ever leaving it, which is the failure the whole literature describes.
 
 ## Key Papers
 
@@ -140,7 +140,7 @@ Read against `protocols/loop.md` sections 4, 10, 13, 14 and `src/adv_loop/policy
 
 | Rule | Already structural in ADV Loop | Gap |
 |---|---|---|
-| R3 representation change | `basin` per seed and experiment; two failures close a basin; re-entry needs a `representation_shift` folded into the fingerprint; `barrier_probe` has a `shift_representation` pattern. | `representation_shift` is free text. The engine cannot check it is a real shift. There is no constraint-enumeration or entity-renaming artifact. That proof workspace shows the ladder can cycle without leaving a basin. |
+| R3 representation change | `basin` per seed and experiment; two failures close a basin; re-entry needs a `representation_shift` folded into the fingerprint; `barrier_probe` has a `shift_representation` pattern. | `representation_shift` is free text. The engine cannot check it is a real shift. There is no constraint-enumeration or entity-renaming artifact. Nothing stops the ladder from cycling without leaving a basin. |
 | R4 anti-expectation | Ideation from a fresh minimal context; seed claims fingerprinted forever. | Nothing models the expected set. Seeds are novel relative to history, not relative to what a competent expert tries first. |
 | R6 dissent | Triage pairwise debate with Elo; lens rotation including `novelty` and `proves_too_much` against a control; `contradiction_search` rung. | Debate is symmetric: same provenance, no preset stance. `contradiction_search` asks to challenge an assumption, not to construct and fund a rival hypothesis. Novelty and acceptability are not recorded separately. |
 | R1 composition | `combine` requires an asset pair never combined before. | Pair novelty only, no distance. Assets carry no field label, so "one in-field, one distant" cannot be enforced. |
@@ -165,29 +165,12 @@ Most on-topic work carries 2026 arXiv ids and is unreviewed: Heuresis (`arxiv:26
 
 Searches that returned nothing usable, which are therefore open ground: an agent questioning its own problem framing; strategy fingerprinting or tabu search for LLM agents as a named method; an agent switching its decomposition mid-task; "contradiction search" as a named method. ADV Loop's fingerprint-never-recurs rule and its `contradiction_search` rung appear to have no direct precedent in the literature.
 
-## The post that prompted this
-
-Not found. The phrase "radical thinkers" is dominated by a Verso Books imprint and SEO pages. Closest candidates:
-
-1. SoTA Letters, Incrementalism and Groupthink (Apr 2026) https://sotaletters.substack.com/p/incrementalism-and-groupthink
-2. Adrian Currie, Does science need mavericks? (Aeon, 2017) https://aeon.co/essays/does-science-need-mavericks-or-are-they-part-of-the-problem
-3. Ruxandra Teslo, The Weird Nerd comes with trade-offs https://www.writingruxandrabio.com/p/the-weird-nerd-comes-with-trade-offs
-4. Dwarkesh Patel with Michael Nielsen, How science actually progresses (Apr 2026) https://www.dwarkesh.com/p/michael-nielsen
-5. WalterL, Try, even if they have you cold (LessWrong, May 2026) https://www.lesswrong.com/posts/aBhMGziEwA7FXNxhq/try-even-if-they-have-you-cold
-
 ## Sources
 
 Papers are listed above with their index ids. Books, talks, and essays without index ids: Luchins 1942; Campbell 1960; Guilford 1967; Mednick 1962; Kuhn 1962 and 1977; Feyerabend 1975; Polya 1945; de Bono 1967 and 1970; Hamming 1986; Dyson 2009; Sunstein 2003; Thiel 2014; Azoulay, Graff Zivin, Manso 2011; McLarty on Grothendieck; and the practitioner essays listed with URLs.
 
 ## Id verification
 
-All 147 distinct index ids cited above were passed to `firecrawl research inspect-paper` on 2026-09-07 and every one resolved to a record (15 first returned HTTP 429 rate limits and resolved on a slow retry). Resolution confirms the id exists in the index, not that the one-line summary is accurate; summaries were written from abstracts and from the subagent reports, and only a handful of load-bearing claims were checked in the paper body.
+All 147 distinct index ids cited above were looked up on 2026-09-07, and every one resolved to a record. Resolution confirms the id exists in the index, not that the one-line summary is accurate; the summaries come from abstracts, and only a handful of load-bearing claims were checked in the paper body.
 
 URL check the same day: all essay URLs returned 200 except the AMS PDF (403 for non-browser clients; correct in a browser), three LessWrong posts and nabeelqu.co (429 rate-limited, not missing), and Nielsen's original blog post (404, replaced with a PDF mirror).
-
-## Rerun Inputs
-
-workflow: firecrawl-research-papers
-topic: radical thinkers, unconventional problem solving, and divergent search for autonomous research-agent loops
-target_count: 90
-output: markdown

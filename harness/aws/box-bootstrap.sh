@@ -7,7 +7,7 @@
 # tokens with adv-token-push and drops the Azure key into /etc/adv-loop/env.d.
 set -euo pipefail
 
-REMOTE="${1:-https://github.com/castor639/adv-loop.git}"
+REMOTE="${1:-https://github.com/castor639/adv-loop-public.git}"
 BRANCH="${2:-main}"
 IMAGE_TAG="${IMAGE_TAG:-adv-loop-ws:v4.29.0-2}"
 
@@ -36,7 +36,7 @@ usermod -aG docker advloop
 install -d -o advloop -g advloop /srv/adv-loop /srv/adv-loop/state /srv/adv-loop/workspaces /srv/adv-loop/inbox
 install -d -o root -g advloop -m 0750 /etc/adv-loop /etc/adv-loop/env.d
 
-# SKIP_GIT=1 means the checkout was rsynced from the operator's machine (private repo, no token on the box).
+# SKIP_GIT=1 means the checkout was rsynced from the operator's machine (no git credentials on the box).
 if [ "${SKIP_GIT:-0}" = "1" ]; then
   [ -d /srv/adv-loop/repo ] || { echo "SKIP_GIT=1 but /srv/adv-loop/repo is missing"; exit 2; }
   chown -R advloop:advloop /srv/adv-loop/repo
