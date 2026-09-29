@@ -1,0 +1,42 @@
+# adv-loop GPU job image. Built on the GPU box by gpu-box-bootstrap.sh:
+#
+#   docker build -t adv-loop-gpu:v1 -f harness/container/Dockerfile.gpu .
+#
+# The base tag is a placeholder until the first build confirms the pytorch tag
+# whose CUDA runtime matches the DLAMI's driver; the fleet lock records the
+# image digest, so a rebuilt or wrong image is refused as environment_drift
+# before a job runs. No credentials are baked in and there is no CMD: the
+# box-side agent runs every job with `docker run --rm ... <image> <argv>`.
+
+ARG BASE=pytorch/pytorch:2.13.0-cuda13.0-cudnn9-runtime
+
+FROM ${BASE}
+ARG UV_VERSION=0.8.4
+ENV DEBIAN_FRONTEND=noninteractive \
+    PATH=/opt/uv:/opt/conda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    LANG=C.UTF-8 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Jobs run as uid 1000 (the box's ubuntu user owns the mirrored workspace), so
+# the image's uid-1000 user is advloop; a pre-existing one is removed first.
+RUN if id -u 1000 >/dev/null 2>&1; then userdel -r "$(id -un 1000)" 2>/dev/null || true; fi \
+    && (groupadd -g 1000 advloop 2>/dev/null || groupmod -n advloop "$(getent group 1000 | cut -d: -f1)") \
+    && useradd -m -u 1000 -g 1000 -s /bin/bash advloop
+
+# uv (pinned) for per-job Python environments; its cache lives on the mounted /home/advloop/.cache.
+RUN mkdir -p /opt/uv && curl -LsSf "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
+    | tar -xz -C /opt/uv --strip-components=1
+
+# The pins the harness reads with `docker run --rm --entrypoint cat <image> /opt/adv-loop/PINS`.
+RUN mkdir -p /opt/adv-loop \
+    && python -c "import sys, torch; print('torch=' + torch.__version__); print('cuda=' + str(torch.version.cuda)); print('python=' + sys.version.split()[0])" > /opt/adv-loop/PINS \
+    && echo "uv=${UV_VERSION}" >> /opt/adv-loop/PINS \
+    && cat /opt/adv-loop/PINS
+
+RUN mkdir -p /srv/adv-loop /home/advloop/.cache && chown -R advloop:advloop /srv/adv-loop /home/advloop
+USER advloop
+WORKDIR /srv/adv-loop

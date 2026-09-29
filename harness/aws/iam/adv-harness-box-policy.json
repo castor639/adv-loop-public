@@ -1,0 +1,24 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DescribeAnyInstance",
+      "Effect": "Allow",
+      "Action": ["ec2:DescribeInstances", "ec2:DescribeInstanceStatus", "ec2:DescribeTags"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "StartStopOnlyTheGpuBox",
+      "Effect": "Allow",
+      "Action": ["ec2:StartInstances", "ec2:StopInstances"],
+      "Resource": "arn:aws:ec2:us-east-2:*:instance/*",
+      "Condition": {"StringEquals": {"aws:ResourceTag/adv-loop": "gpu"}}
+    },
+    {
+      "Sid": "ReadCostExplorer",
+      "Effect": "Allow",
+      "Action": ["ce:GetCostAndUsage"],
+      "Resource": "*"
+    }
+  ]
+}

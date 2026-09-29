@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adv-loop.local/schemas/event.schema.json",
+  "title": "ADV Loop event envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["seq", "at", "type", "request_id", "payload", "prev_hash", "hash"],
+  "properties": {
+    "seq": {"type": "integer", "minimum": 1},
+    "at": {"type": "string", "format": "date-time"},
+    "type": {"enum": [
+      "task_created", "legacy_imported", "attempt_recorded", "task_completed",
+      "task_blocked", "task_unsafe", "budget_exhausted",
+      "task_unblocked", "task_retested",
+      "human_input_requested", "human_input_provided",
+      "criterion_added", "wish_fulfilled",
+      "process_fault_recorded", "contract_overlay_adopted"
+    ]},
+    "request_id": {"type": "string", "minLength": 1},
+    "payload": {"type": "object"},
+    "prev_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

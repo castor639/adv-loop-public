@@ -1,0 +1,19 @@
+# rsync excludes for `adv-ctl sync-repo`: the checkout minus local state, caches, and worktrees.
+.git/
+.gitignore
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.DS_Store
+workspaces/
+inbox/
+harness/state/gpu-*
+harness/state/aws-spend.json
+harness/state/api-spend.json

@@ -1,0 +1,10 @@
+#cloud-config
+# Rendered by launch-gpu-box.sh: the harness-box public key, restricted to the VPC, becomes the
+# only ssh identity for ubuntu besides the owner's EC2 key pair. The directories are the mirror
+# root, the pushed repo, per-job /tmp volumes, and the pip/HF cache, all owned by uid 1000.
+hostname: adv-gpu-box
+preserve_hostname: false
+ssh_authorized_keys:
+  - 'restrict,from="__VPC_CIDR__" __GPU_AUTHORIZED_KEY__'
+runcmd:
+  - [install, -d, -o, "1000", -g, "1000", /srv/adv-loop, /srv/adv-loop/workspaces, /srv/adv-loop/repo, /srv/adv-loop/jobs, /srv/adv-loop/cache]

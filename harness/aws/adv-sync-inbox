@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Pull dropped goals from the S3 inbox into the local inbox before a pass.
+# Bucket and prefix from /etc/adv-loop/env.d/harness: ADV_LOOP_S3_INBOX=s3://bucket/incoming
+set -euo pipefail
+INBOX="${ADV_LOOP_INBOX:-/srv/adv-loop/inbox}"
+S3="${ADV_LOOP_S3_INBOX:-}"
+[ -n "$S3" ] || { echo "adv-sync-inbox: ADV_LOOP_S3_INBOX unset; nothing to sync"; exit 0; }
+mkdir -p "$INBOX"
+# Each drop is a directory; move so a drop is processed exactly once.
+aws s3 mv --recursive --only-show-errors "$S3/" "$INBOX/" || echo "adv-sync-inbox: sync failed (continuing)"

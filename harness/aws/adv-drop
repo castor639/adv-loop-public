@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Mac side: drop a goal directory into the fleet and wake harness-box.
+#   adv-drop <dir-with-goal.md-or-payload> [--no-start]
+# Needs: ADV_LOOP_S3_INBOX (s3://bucket/incoming), ADV_LOOP_HARNESS_BOX (instance id),
+# AWS_DEFAULT_REGION. A drop is one directory: task text, payload, optional
+# charter.md and charter.json; intake partitions it into workspaces on the box.
+set -euo pipefail
+DIR="${1:?usage: adv-drop <dir> [--no-start]}"
+S3="${ADV_LOOP_S3_INBOX:?set ADV_LOOP_S3_INBOX}"
+BOX="${ADV_LOOP_HARNESS_BOX:?set ADV_LOOP_HARNESS_BOX}"
+NAME="$(basename "$DIR")-$(date -u +%Y%m%dT%H%M%SZ)"
+aws s3 cp --recursive --only-show-errors "$DIR" "$S3/$NAME/"
+echo "dropped $S3/$NAME/"
+if [ "${2:-}" != "--no-start" ]; then
+  state="$(aws ec2 describe-instances --instance-ids "$BOX" --query 'Reservations[0].Instances[0].State.Name' --output text)"
+  if [ "$state" = "stopped" ]; then
+    aws ec2 start-instances --instance-ids "$BOX" >/dev/null
+    echo "started $BOX"
+  else
+    echo "$BOX is $state; the supervisor picks the drop up on its next pass"
+  fi
+fi

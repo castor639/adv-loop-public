@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd template: every 15 minutes run `adv-ctl wake --if-due`, which starts harness-box when
+  the wake time it last reported (cached by adv-ctl status/stop) has passed.
+  Install:  sed "s|__HOME__|$HOME|g; s|__ADV_CTL__|$(command -v adv-ctl)|g" com.adv-loop.wake.plist \
+              > ~/Library/LaunchAgents/com.adv-loop.wake.plist
+            mkdir -p ~/Library/Logs/adv-loop && launchctl load ~/Library/LaunchAgents/com.adv-loop.wake.plist
+  Remove:   launchctl unload ~/Library/LaunchAgents/com.adv-loop.wake.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.adv-loop.wake</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__ADV_CTL__</string>
+    <string>wake</string>
+    <string>--if-due</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/adv-loop/wake.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/adv-loop/wake.log</string>
+</dict>
+</plist>

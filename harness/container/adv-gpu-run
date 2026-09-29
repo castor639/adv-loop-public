@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""In-container GPU client.
+
+    adv-gpu-run [--cwd D] [--inputs a,b] --outputs c,d [--timeout S] [--env K=V]...
+                [--network bridge|none] [--label T] -- <argv...>
+    adv-gpu-run --collect <job_id>
+    adv-gpu-run --status [<job_id>]
+
+Writes a request into $ADV_LOOP_GPU_DIR and waits for the host broker, which
+runs the job on the GPU box, pulls the declared outputs into the workspace,
+and answers with a result file. Nothing here touches the box or a
+credential. The call blocks for the whole job: do not poll or sleep around
+it. Exit 0 when the job finished with return code 0, 1 when it finished with
+another code, 2 for a refusal, a collect that found nothing, or no answer.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+import uuid
+
+DEFAULT_MAX_JOB_SECONDS = 14400
+RESULT_GRACE_SECONDS = 900
+
+
+def _split(value):
+    return [item for item in (value or "").split(",") if item]
+
+
+def _parse(argv):
+    parser = argparse.ArgumentParser(prog="adv-gpu-run")
+    parser.add_argument("--collect", metavar="JOB_ID")
+    parser.add_argument("--status", nargs="?", const="", metavar="JOB_ID")
+    parser.add_argument("--cwd")
+    parser.add_argument("--inputs", help="comma-separated workspace-relative paths pushed to the box")
+    parser.add_argument("--outputs", help="comma-separated workspace-relative paths pulled back")
+    parser.add_argument("--timeout", type=float, help="per-job cap in seconds")
+    parser.add_argument("--env", action="append", default=[], metavar="K=V")
+    parser.add_argument("--network", choices=["bridge", "none"])
+    parser.add_argument("--label")
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    if args.collect is not None:
+        return "collect", {"job_id": args.collect}, RESULT_GRACE_SECONDS
+    if args.status is not None:
+        return "status", ({"job_id": args.status} if args.status else {}), RESULT_GRACE_SECONDS
+    command = list(args.command)
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        parser.error("give the job argv after --")
+    if not args.outputs:
+        parser.error("--outputs is required")
+    request = {"command": command, "outputs": _split(args.outputs)}
+    if args.cwd:
+        request["cwd"] = args.cwd
+    if args.inputs:
+        request["inputs"] = _split(args.inputs)
+    if args.timeout is not None:
+        request["timeout_seconds"] = args.timeout
+    env = {}
+    for item in args.env:
+        if "=" not in item:
+            parser.error(f"--env expects K=V, got {item!r}")
+        key, value = item.split("=", 1)
+        env[key] = value
+    if env:
+        request["env"] = env
+    if args.network:
+        request["network"] = args.network
+    if args.label:
+        request["label"] = args.label
+    cap = float(os.environ.get("ADV_LOOP_GPU_MAX_JOB_SECONDS") or DEFAULT_MAX_JOB_SECONDS)
+    wait = min(args.timeout, cap) if args.timeout is not None else cap
+    return "run", request, wait + RESULT_GRACE_SECONDS
+
+
+def _exit_code(kind, result):
+    if not isinstance(result, dict) or result.get("error"):
+        return 2
+    if kind == "status":
+        return 0
+    if result.get("status") == "finished":
+        return 0 if result.get("returncode") == 0 else 1
+    return 2
+
+
+def main():
+    kind, request_args, wait_seconds = _parse(sys.argv[1:])
+    directory = os.environ.get("ADV_LOOP_GPU_DIR") or os.path.join(os.getcwd(), ".harness", "gpu")
+    os.makedirs(directory, exist_ok=True)
+    request_id = uuid.uuid4().hex
+    request = {
+        "request_id": request_id,
+        "session_id": os.environ.get("ADV_LOOP_SESSION_ID"),
+        "kind": kind,
+        "args": request_args,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    final = os.path.join(directory, f"{request_id}.request.json")
+    temp = final + ".tmp"
+    with open(temp, "w", encoding="utf-8") as handle:
+        json.dump(request, handle, sort_keys=True)
+    os.replace(temp, final)
+
+    result_path = os.path.join(directory, f"{request_id}.result.json")
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline:
+        if os.path.exists(result_path):
+            with open(result_path, "r", encoding="utf-8") as handle:
+                result = json.load(handle)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return _exit_code(kind, result)
+        time.sleep(0.5)
+    print(json.dumps({"error": "no result within timeout", "request_id": request_id, "kind": kind}))
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

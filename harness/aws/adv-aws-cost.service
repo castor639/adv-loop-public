@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh /srv/adv-loop/state/aws-spend.json from Cost Explorer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=advloop
+Group=advloop
+WorkingDirectory=/srv/adv-loop
+Environment=ADV_LOOP_AWS_SINCE=2026-09-01
+EnvironmentFile=-/etc/adv-loop/env.d/harness
+ExecStart=/srv/adv-loop/venv/bin/python3 /srv/adv-loop/repo/harness/aws/aws_cost.py --since ${ADV_LOOP_AWS_SINCE} --state /srv/adv-loop/state/aws-spend.json --group-by-tag adv-loop

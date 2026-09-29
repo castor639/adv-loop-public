@@ -1,0 +1,31 @@
+[Unit]
+Description=ADV Loop harness supervisor
+After=network-online.target docker.service adv-aws-cost.service
+Wants=network-online.target adv-aws-cost.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=advloop
+Group=docker
+# systemd replaces the user's groups when Group= is set, so name the login group explicitly: the Azure key is root:advloop 0440.
+SupplementaryGroups=advloop
+WorkingDirectory=/srv/adv-loop
+Environment=PYTHONUNBUFFERED=1
+Environment=ADV_LOOP_ROOT=/srv/adv-loop/workspaces
+Environment=ADV_LOOP_STATE=/srv/adv-loop/state
+Environment=ADV_LOOP_INBOX=/srv/adv-loop/inbox
+Environment=ADV_LOOP_REPO=/srv/adv-loop/repo
+EnvironmentFile=-/etc/adv-loop/env.d/harness
+UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL CLAUDECODE
+ExecStartPre=/usr/local/bin/adv-sync-inbox
+ExecStart=/srv/adv-loop/venv/bin/adv-harness run --root /srv/adv-loop/workspaces --state /srv/adv-loop/state --inbox /srv/adv-loop/inbox --repo /srv/adv-loop/repo --containers --idle-stop-minutes 20 --shutdown
+# The GPU box never outlives the controller: stop it and bill its hours whenever the unit stops.
+ExecStopPost=/srv/adv-loop/venv/bin/adv-harness gpu stop --state /srv/adv-loop/state --reason service_stop
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=120
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

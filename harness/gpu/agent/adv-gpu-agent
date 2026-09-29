@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+"""Box-side job runner for adv-gpu-box; installed at /usr/local/bin/adv-gpu-agent, runs as ubuntu.
+
+The controller on harness-box only ever talks to this program over ssh, one
+subcommand per call, one JSON object on stdout:
+
+    ready | submit <job_dir> | run <job_dir> | wait <job_dir> --max S | status <job_dir>
+    kill <job_dir> | heartbeat | gc --keep-days N
+
+`submit` validates `<job_dir>/job.json`, refuses with exit 75 while another
+job holds `/run/adv-gpu/job.lock`, and detaches `run`, which owns the lock
+for the life of the container. Every call touches `/run/adv-gpu/heartbeat`;
+the watchdog powers the box off when that file goes stale. Nothing here
+holds a credential and nothing imports the harness: the box is disposable.
+"""
+
+from __future__ import annotations
+
+import calendar
+import fcntl
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from typing import Any, Dict, List, Optional
+
+RUN_DIR = os.environ.get("ADV_GPU_RUN_DIR", "/run/adv-gpu")
+JOBS_ROOT = os.environ.get("ADV_GPU_JOBS_ROOT", "/srv/adv-loop/jobs")
+CACHE = os.environ.get("ADV_GPU_CACHE", "/srv/adv-loop/cache")
+BOOTSTRAP_FILE = os.environ.get("ADV_GPU_BOOTSTRAP_FILE", "/srv/adv-loop/.bootstrap.json")
+DOCKER = os.environ.get("DOCKER", "docker")
+POLL_SECONDS = float(os.environ.get("ADV_GPU_POLL_SECONDS", "30"))
+WAIT_POLL_SECONDS = float(os.environ.get("ADV_GPU_WAIT_POLL_SECONDS", "5"))
+HEARTBEAT = os.path.join(RUN_DIR, "heartbeat")
+LOCK = os.path.join(RUN_DIR, "job.lock")
+CONTAINER_PREFIX = "adv-gpu-"
+TERMINAL = ("done", "failed", "timeout", "killed", "interrupted", "rejected", "rejected_busy")
+JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+ENV_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+ENV_FORBIDDEN = ("AWS_", "ANTHROPIC_", "AZURE_", "CLAUDE", "SSH_", "LD_")
+ENV_VALUE_MAX = 4096
+NETWORKS = ("bridge", "none")
+BUSY_EXIT = 75
+
+
+def iso(ts: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+def parse_iso(text: Any) -> Optional[float]:
+    try:
+        return float(calendar.timegm(time.strptime(str(text), "%Y-%m-%dT%H:%M:%SZ")))
+    except (ValueError, TypeError):
+        return None
+
+
+def emit(obj: Dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(obj, sort_keys=True) + "\n")
+    sys.stdout.flush()
+
+
+def touch_heartbeat() -> None:
+    os.makedirs(RUN_DIR, exist_ok=True)
+    with open(HEARTBEAT, "a"):
+        pass
+    os.utime(HEARTBEAT, None)
+
+
+def read_json(path: str) -> Optional[Dict[str, Any]]:
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def write_json(path: str, data: Dict[str, Any]) -> None:
+    temp = f"{path}.{os.getpid()}.tmp"
+    with open(temp, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, sort_keys=True)
+    os.replace(temp, path)
+
+
+def status_path(job_dir: str) -> str:
+    return os.path.join(job_dir, "status.json")
+
+
+def docker(args: List[str], timeout: Optional[float] = None) -> "subprocess.CompletedProcess[str]":
+    try:
+        return subprocess.run([DOCKER, *args], capture_output=True, text=True, check=False, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess([DOCKER, *args], 125, stdout="", stderr=str(exc))
+
+
+def lock_held() -> bool:
+    os.makedirs(RUN_DIR, exist_ok=True)
+    fd = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o664)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return True
+    fcntl.flock(fd, fcntl.LOCK_UN)
+    return False
+    # the descriptor closes with the process; short-lived callers only
+
+
+def pid_alive(pid: Any) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except (ProcessLookupError, ValueError, TypeError):
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def container_name(job_id: str) -> str:
+    return CONTAINER_PREFIX + job_id
+
+
+def container_present(name: str) -> bool:
+    done = docker(["ps", "-a", "-q", "--filter", f"name=^{name}$"], timeout=30)
+    return done.returncode == 0 and bool(done.stdout.strip())
+
+
+def inside(base: str, target: str) -> bool:
+    try:
+        return os.path.commonpath([base, target]) == base
+    except ValueError:
+        return False
+
+
+def validate(job: Any, job_dir: str) -> Dict[str, Any]:
+    if not isinstance(job, dict):
+        raise ValueError("job.json must be an object")
+    job_id = job.get("job_id")
+    if not isinstance(job_id, str) or not JOB_ID.match(job_id):
+        raise ValueError("job_id must match " + JOB_ID.pattern)
+    if os.path.basename(os.path.normpath(job_dir)) != job_id:
+        raise ValueError("the job directory must be named after job_id")
+    workspace = job.get("workspace")
+    if not isinstance(workspace, str) or not os.path.isabs(workspace) or not os.path.isdir(workspace):
+        raise ValueError("workspace must be an existing absolute directory")
+    ws_real = os.path.realpath(workspace)
+    if not inside(ws_real, os.path.realpath(job_dir)):
+        raise ValueError("the job directory must live inside the workspace")
+    command = job.get("command")
+    if not isinstance(command, list) or not command or not all(isinstance(a, str) and a for a in command):
+        raise ValueError("command must be a non-empty list of non-empty strings")
+    cwd = job.get("cwd") or "."
+    if not isinstance(cwd, str) or os.path.isabs(cwd):
+        raise ValueError("cwd must be a workspace-relative path")
+    cwd_real = os.path.realpath(os.path.join(ws_real, cwd))
+    if not inside(ws_real, cwd_real):
+        raise ValueError("cwd escapes the workspace")
+    env = job.get("env") or {}
+    if not isinstance(env, dict):
+        raise ValueError("env must be an object")
+    for key, value in env.items():
+        if not isinstance(key, str) or not ENV_KEY.match(key) or key.startswith(ENV_FORBIDDEN):
+            raise ValueError(f"env key refused: {key!r}")
+        if not isinstance(value, str) or len(value.encode("utf-8")) > ENV_VALUE_MAX:
+            raise ValueError(f"env value refused for {key}: must be a string of at most {ENV_VALUE_MAX} bytes")
+    network = job.get("network") or "bridge"
+    if network not in NETWORKS:
+        raise ValueError("network must be bridge or none")
+    timeout = job.get("timeout_seconds")
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1:
+        raise ValueError("timeout_seconds must be a positive integer")
+    image = job.get("image") or os.environ.get("ADV_GPU_IMAGE") or (read_json(BOOTSTRAP_FILE) or {}).get("image")
+    if not isinstance(image, str) or not image:
+        raise ValueError("no image: set job.image or ADV_GPU_IMAGE")
+    return {"job_id": job_id, "workspace": workspace, "command": command, "cwd": cwd,
+            "workdir": os.path.normpath(os.path.join(workspace, cwd)), "env": dict(env), "network": network,
+            "timeout_seconds": timeout, "image": image}
+
+
+def load_job(job_dir: str) -> Dict[str, Any]:
+    job = read_json(os.path.join(job_dir, "job.json"))
+    if job is None:
+        raise ValueError(f"no readable job.json in {job_dir}")
+    return validate(job, job_dir)
+
+
+def run_argv(job: Dict[str, Any], name: str, tmp: str) -> List[str]:
+    ws = job["workspace"]
+    argv = ["run", "-d", "--name", name, "--init", "--gpus", "all", "--user", "1000:1000", "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges", "--network", job["network"], "--memory", "13g",
+            "--memory-swap", "13g", "--cpus", "3.5", "--pids-limit", "4096", "--shm-size", "4g",
+            "-v", f"{ws}:{ws}:rw", "-v", f"{tmp}:/tmp:rw", "-v", f"{CACHE}:/home/advloop/.cache:rw",
+            "-w", job["workdir"], "-e", "HOME=/home/advloop", "-e", f"ADV_LOOP_WORKSPACE={ws}",
+            "-e", f"ADV_GPU_JOB_ID={job['job_id']}"]
+    for key in sorted(job["env"]):
+        argv += ["-e", f"{key}={job['env'][key]}"]
+    return argv + [job["image"], *job["command"]]
+
+
+def save_logs(job_dir: str, name: str) -> bool:
+    logs = docker(["logs", name], timeout=600)
+    if logs.returncode != 0:
+        return False
+    with open(os.path.join(job_dir, "stdout.log"), "w", encoding="utf-8", errors="replace") as handle:
+        handle.write(logs.stdout)
+    with open(os.path.join(job_dir, "stderr.log"), "w", encoding="utf-8", errors="replace") as handle:
+        handle.write(logs.stderr)
+    return True
+
+
+def finish(status: Dict[str, Any], state: str, exit_code: Optional[int]) -> Dict[str, Any]:
+    finished = time.time()
+    started = parse_iso(status.get("started_at")) or finished
+    status.update({"state": state, "exit_code": exit_code, "finished_at": iso(finished),
+                   "seconds": int(round(finished - started))})
+    return status
+
+
+def cmd_ready() -> int:
+    image = os.environ.get("ADV_GPU_IMAGE") or (read_json(BOOTSTRAP_FILE) or {}).get("image")
+    try:
+        smi = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, check=False, timeout=60)
+        gpus = [line for line in smi.stdout.splitlines() if line.strip()] if smi.returncode == 0 else []
+    except (OSError, subprocess.TimeoutExpired):
+        smi, gpus = None, []
+    try:
+        with open("/proc/uptime", "r", encoding="utf-8") as handle:
+            uptime = float(handle.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        uptime = time.clock_gettime(time.CLOCK_MONOTONIC)
+    root = JOBS_ROOT if os.path.isdir(JOBS_ROOT) else "/"
+    bootstrap = read_json(BOOTSTRAP_FILE) or {}
+    touch_heartbeat()
+    emit({"docker": docker(["info"], timeout=60).returncode == 0,
+          "nvidia_smi": bool(smi is not None and smi.returncode == 0), "gpus": gpus,
+          "image": image, "image_present": bool(image) and docker(["image", "inspect", image], timeout=60).returncode == 0,
+          "disk_free_gb": round(shutil.disk_usage(root).free / 2 ** 30, 1),
+          "bootstrap_hash": bootstrap.get("hash"), "image_digest": bootstrap.get("image_digest"),
+          "uptime_s": round(uptime, 1), "job_running": lock_held(), "heartbeat_at": iso(time.time())})
+    return 0
+
+
+def cmd_submit(job_dir: str) -> int:
+    try:
+        job = load_job(job_dir)
+    except ValueError as exc:
+        emit({"state": "rejected", "error": str(exc)})
+        return 2
+    if lock_held():
+        emit({"state": "rejected_busy", "job_id": job["job_id"]})
+        return BUSY_EXIT
+    write_json(status_path(job_dir), {"state": "submitted", "job_id": job["job_id"], "submitted_at": iso(time.time())})
+    subprocess.Popen([sys.executable, os.path.abspath(__file__), "run", job_dir], start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+    deadline = time.time() + 5
+    status = read_json(status_path(job_dir)) or {"state": "submitted"}
+    while status.get("state") == "submitted" and time.time() < deadline:
+        time.sleep(0.1)
+        status = read_json(status_path(job_dir)) or status
+    touch_heartbeat()
+    emit(status)
+    return BUSY_EXIT if status.get("state") == "rejected_busy" else 0
+
+
+def cmd_run(job_dir: str) -> int:
+    os.makedirs(RUN_DIR, exist_ok=True)
+    fd = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o664)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        write_json(status_path(job_dir), {"state": "rejected_busy", "at": iso(time.time())})
+        return BUSY_EXIT
+    try:
+        return run_locked(job_dir)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def run_locked(job_dir: str) -> int:
+    try:
+        job = load_job(job_dir)
+    except ValueError as exc:
+        write_json(status_path(job_dir), {"state": "rejected", "error": str(exc), "at": iso(time.time())})
+        return 2
+    name = container_name(job["job_id"])
+    started = time.time()
+    status = {"state": "running", "job_id": job["job_id"], "pid": os.getpid(), "container": name,
+              "started_at": iso(started), "finished_at": None, "exit_code": None, "seconds": None}
+    write_json(status_path(job_dir), status)
+    touch_heartbeat()
+    tmp = os.path.join(JOBS_ROOT, job["job_id"], "tmp")
+    for path in (tmp, CACHE, job["workdir"]):
+        os.makedirs(path, exist_ok=True)
+    docker(["rm", "-f", name], timeout=120)
+    created = docker(run_argv(job, name, tmp), timeout=600)
+    if created.returncode != 0:
+        status["error"] = (created.stderr or created.stdout).strip()[-2000:]
+        write_json(status_path(job_dir), finish(status, "failed", None))
+        return 1
+    result: Dict[str, Any] = {}
+
+    def waiter() -> None:
+        done = docker(["wait", name])
+        result["stdout"] = done.stdout if done.returncode == 0 else ""
+
+    thread = threading.Thread(target=waiter, daemon=True)
+    thread.start()
+    deadline = started + job["timeout_seconds"]
+    timed_out = False
+    while thread.is_alive():
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            if not timed_out:
+                timed_out = True
+                docker(["kill", name], timeout=120)
+                deadline = time.time() + 60
+                continue
+            docker(["rm", "-f", name], timeout=120)
+            break
+        thread.join(timeout=max(0.05, min(POLL_SECONDS, remaining)))
+        touch_heartbeat()
+    thread.join(timeout=5)
+    try:
+        exit_code: Optional[int] = int(result.get("stdout", "").strip())
+    except ValueError:
+        exit_code = None
+    save_logs(job_dir, name)
+    docker(["rm", "-f", name], timeout=120)
+    current = read_json(status_path(job_dir)) or {}
+    if current.get("state") == "killed":
+        final = current
+    else:
+        state = "timeout" if timed_out else ("done" if exit_code == 0 else "failed")
+        final = finish(status, state, exit_code)
+    write_json(status_path(job_dir), final)
+    touch_heartbeat()
+    return 0
+
+
+def cmd_wait(job_dir: str, max_seconds: float) -> int:
+    deadline = time.time() + max_seconds
+    while True:
+        touch_heartbeat()
+        status = read_json(status_path(job_dir))
+        if status is None:
+            emit({"state": "missing", "job_dir": job_dir})
+            return 2
+        state = status.get("state")
+        if state in TERMINAL:
+            emit(status)
+            return 0
+        name = status.get("container") or container_name(status.get("job_id") or os.path.basename(job_dir))
+        dead_runner = state == "running" and not pid_alive(status.get("pid"))
+        stale_submit = (state == "submitted" and not lock_held()
+                        and time.time() - (parse_iso(status.get("submitted_at")) or time.time()) > 15)
+        if (dead_runner or stale_submit) and not container_present(name):
+            write_json(status_path(job_dir), finish(status, "interrupted", None))
+            emit(read_json(status_path(job_dir)) or status)
+            return 0
+        if time.time() >= deadline:
+            emit(status)
+            return 3
+        time.sleep(max(0.05, min(WAIT_POLL_SECONDS, deadline - time.time())))
+
+
+def cmd_status(job_dir: str) -> int:
+    touch_heartbeat()
+    emit(read_json(status_path(job_dir)) or {"state": "missing", "job_dir": job_dir})
+    return 0
+
+
+def cmd_kill(job_dir: str) -> int:
+    status = read_json(status_path(job_dir)) or {"state": "missing"}
+    job = read_json(os.path.join(job_dir, "job.json")) or {}
+    name = status.get("container") or container_name(str(job.get("job_id") or os.path.basename(job_dir)))
+    save_logs(job_dir, name)
+    docker(["rm", "-f", name], timeout=120)
+    if status.get("state") not in TERMINAL:
+        status.setdefault("container", name)
+        write_json(status_path(job_dir), finish(status, "killed", None))
+        status = read_json(status_path(job_dir)) or status
+    touch_heartbeat()
+    emit(status)
+    return 0
+
+
+def cmd_gc(keep_days: float) -> int:
+    cutoff = time.time() - keep_days * 86400
+    removed: List[str] = []
+    if os.path.isdir(JOBS_ROOT):
+        for entry in sorted(os.listdir(JOBS_ROOT)):
+            path = os.path.join(JOBS_ROOT, entry)
+            try:
+                if os.path.isdir(path) and os.stat(path).st_mtime < cutoff and not container_present(container_name(entry)):
+                    shutil.rmtree(path, ignore_errors=True)
+                    removed.append(entry)
+            except OSError:
+                continue
+    touch_heartbeat()
+    emit({"removed": removed, "keep_days": keep_days})
+    return 0
+
+
+def main(argv: List[str]) -> int:
+    usage = "usage: adv-gpu-agent ready | submit DIR | run DIR | wait DIR --max S | status DIR | kill DIR | heartbeat | gc --keep-days N"
+    if not argv:
+        emit({"error": usage})
+        return 2
+    cmd, rest = argv[0], argv[1:]
+    try:
+        if cmd == "ready":
+            return cmd_ready()
+        if cmd == "heartbeat":
+            touch_heartbeat()
+            emit({"ok": True, "heartbeat_at": iso(time.time())})
+            return 0
+        if cmd == "gc":
+            keep = float(rest[rest.index("--keep-days") + 1]) if "--keep-days" in rest else 30.0
+            return cmd_gc(keep)
+        if cmd in ("submit", "run", "status", "kill") and len(rest) == 1:
+            job_dir = os.path.abspath(rest[0])
+            return {"submit": cmd_submit, "run": cmd_run, "status": cmd_status, "kill": cmd_kill}[cmd](job_dir)
+        if cmd == "wait" and rest:
+            max_seconds = float(rest[rest.index("--max") + 1]) if "--max" in rest else 300.0
+            return cmd_wait(os.path.abspath(rest[0]), max_seconds)
+    except (IndexError, ValueError) as exc:
+        emit({"error": f"{usage} ({exc})"})
+        return 2
+    emit({"error": usage})
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

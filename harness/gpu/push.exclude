@@ -1,0 +1,13 @@
+# rsync --exclude-from for every push to the GPU box. Defence in depth: box.py refuses
+# these paths outright; this file keeps them out of any directory that is pushed whole.
+.checker-key
+.harness/host/
+.harness/sessions/
+.harness/validate/
+events.jsonl
+.pending-event.json
+.adv-loop.lock
+transcripts/
+.spend.jsonl
+.gpu-spend.jsonl
+.harness/pause.json

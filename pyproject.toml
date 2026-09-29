@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adv-loop"
+version = "0.5.0"
+description = "An event-sourced, proof-gated control plane for persistent agent work"
+requires-python = ">=3.9"
+
+[project.scripts]
+adv-loop = "adv_loop.cli:main"
+adv-harness = "harness.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src", "harness" = "harness"}
+packages = ["adv_loop", "harness", "harness.backends", "harness.gpu"]
+
+[tool.setuptools.package-data]
+harness = ["prompts/*.md", "prompts/profiles/*.md", "schema_cache/*.json", "container/*", "container/lean-template/*", "state/*.json", "aws/*", "aws/iam/*", "gpu/agent/*", "gpu/*.exclude"]

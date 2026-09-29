@@ -1,0 +1,123 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "context_scope": {
+      "const": "minimal"
+    },
+    "contradiction_resolutions": {
+      "maxItems": 0,
+      "type": "array"
+    },
+    "contradictions": {
+      "maxItems": 0,
+      "type": "array"
+    },
+    "criterion_updates": {
+      "maxItems": 0,
+      "type": "array"
+    },
+    "decisions": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "rationale": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "rejected_alternatives": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "decision",
+          "rationale"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "evidence": {
+      "maxItems": 0,
+      "type": "array"
+    },
+    "ideation_kind": {
+      "enum": [
+        "broad",
+        "evolve"
+      ]
+    },
+    "seeds": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "basin": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "claim": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "control_object": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "first_unjustified_step": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "kill_test": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "needs": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "parents": {
+            "items": {
+              "pattern": "^Q[0-9]{4}$",
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "representation_shift": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim",
+          "basin",
+          "first_unjustified_step",
+          "kill_test"
+        ],
+        "type": "object"
+      },
+      "maxItems": 24,
+      "minItems": 3,
+      "type": "array"
+    }
+  },
+  "required": [
+    "context_scope",
+    "ideation_kind",
+    "seeds",
+    "decisions"
+  ],
+  "title": "ADV Loop model output for explorer/ideation (policy 5.0)",
+  "type": "object"
+}

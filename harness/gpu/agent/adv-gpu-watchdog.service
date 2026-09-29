@@ -1,0 +1,7 @@
+[Unit]
+Description=ADV GPU box idle and uptime watchdog
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/adv-gpu-watchdog

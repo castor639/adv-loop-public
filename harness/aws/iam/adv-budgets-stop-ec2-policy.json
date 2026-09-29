@@ -1,0 +1,28 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RunTheStopAutomation",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:StartAutomationExecution",
+        "ssm:GetAutomationExecution",
+        "ssm:DescribeAutomationExecutions",
+        "ssm:StopAutomationExecution"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "StopTheBoxes",
+      "Effect": "Allow",
+      "Action": ["ec2:StopInstances", "ec2:DescribeInstances", "ec2:DescribeInstanceStatus"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PassItself",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::*:role/adv-budgets-stop-ec2"
+    }
+  ]
+}

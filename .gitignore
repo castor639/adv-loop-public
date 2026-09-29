@@ -1,0 +1,55 @@
+__pycache__/
+*.pyc
+build/
+*.egg-info/
+workspaces/*/
+!workspaces/.gitkeep
+# Transient per-workspace sidecars: never part of the audited projection set.
+.pending-directive.json
+.on-record-status.json
+.adv-loop.lock
+# harness runtime state written by the loops on the box; the shipped defaults stay tracked
+harness/state/signal/
+harness/state/snapshots/
+harness/state/sessions/
+harness/state/transcripts/
+harness/state/refinements.jsonl
+harness/state/memories.jsonl
+harness/state/prompt-addenda/
+harness/state/profile-addenda/
+harness/state/.spend.jsonl
+harness/state/.paused
+harness/proposals/
+harness/state/api-spend.json
+harness/state/aws-spend.json
+harness/state/gpu-box.json
+harness/state/gpu-box.lock.json
+harness/state/gpu-box.launch.lock
+harness/state/gpu-box.lock
+harness/state/gpu-box.key
+harness/state/gpu-box.key.pub
+harness/state/gpu-box.known_hosts
+harness/state/gpu-jobs.jsonl
+harness/state/gpu-spend.jsonl
+harness/state/gpu-jobs/
+# local secrets and machine files
+.env
+*.env
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+.venv/
+venv/
+.DS_Store
+.claude/
+CLAUDE.local.md
+dist/
+.pytest_cache/
+# research runs, drops and session logs stay local
+transcripts/
+mirrors/
+.attempts/
+charters/
+inbox/
+drops/

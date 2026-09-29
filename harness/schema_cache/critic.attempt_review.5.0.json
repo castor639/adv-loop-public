@@ -1,0 +1,468 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "assessment": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_causes": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "cause": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "discriminating_test": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "cause",
+              "discriminating_test"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "control_check": {
+          "additionalProperties": false,
+          "properties": {
+            "control_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "note": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "rejects_control",
+                "endorses_control",
+                "not_applicable"
+              ]
+            }
+          },
+          "required": [
+            "control_id",
+            "outcome"
+          ],
+          "type": "object"
+        },
+        "harness_gap": {
+          "type": "boolean"
+        },
+        "reasons": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "target_attempt_id": {
+          "pattern": "^A[0-9]{6}$",
+          "type": "string"
+        },
+        "uncertainty": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "validated_progress",
+            "mixed",
+            "no_progress",
+            "invalid"
+          ]
+        }
+      },
+      "required": [
+        "target_attempt_id",
+        "verdict",
+        "reasons",
+        "uncertainty"
+      ],
+      "type": "object"
+    },
+    "contradiction_resolutions": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "description": "ids of evidence already recorded in the workspace (E000012 form); never a verdict id",
+            "items": {
+              "pattern": "^E[0-9]{6}$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "evidence_refs": {
+            "description": "ref values of evidence entries in this same submission (never verdict ids or paths)",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "resolution": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "resolution"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "contradictions": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "claim": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "evidence_ids": {
+            "description": "ids of evidence already recorded in the workspace (E000012 form); never a verdict id",
+            "items": {
+              "pattern": "^E[0-9]{6}$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "evidence_refs": {
+            "description": "ref values of evidence entries in this same submission (never verdict ids or paths)",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "noncritical"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "claim",
+          "severity"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "criterion_updates": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "description": "ids of evidence already recorded in the workspace (E000012 form); never a verdict id",
+            "items": {
+              "pattern": "^E[0-9]{6}$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "evidence_refs": {
+            "description": "ref values of evidence entries in this same submission (never verdict ids or paths)",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "partial",
+              "satisfied",
+              "failed_verification"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "decisions": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "rationale": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "rejected_alternatives": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "decision",
+          "rationale"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "evidence": {
+      "items": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "artifact_path"
+            ]
+          },
+          {
+            "required": [
+              "verdict_id"
+            ]
+          }
+        ],
+        "properties": {
+          "artifact_path": {
+            "description": "Workspace-relative path; the harness computes the fingerprint.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "claim": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "formalization_rank": {
+            "enum": [
+              "sourced_claim",
+              "replicated_experiment",
+              "executable_spec",
+              "smt_discharge",
+              "model_check",
+              "kernel_proof"
+            ]
+          },
+          "independence_key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "locator": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "method": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "quality": {
+            "enum": [
+              "direct",
+              "indirect"
+            ]
+          },
+          "ref": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "supports": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "theory_base_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "verdict_id": {
+            "description": "A checker verdict id issued in this session by adv-validate.",
+            "pattern": "^V[0-9]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "kind",
+          "quality",
+          "claim",
+          "method",
+          "independence_key",
+          "supports"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "hypothesis": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "interpretation": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "lens": {
+      "enum": [
+        "correctness",
+        "novelty",
+        "proves_too_much",
+        "simplification"
+      ]
+    },
+    "next_step": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "observation_notes": {
+      "description": "Your reading of the recorded tool results. The raw observation is generated by the harness.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "progress",
+        "no_progress",
+        "failed",
+        "inconclusive"
+      ]
+    },
+    "strategy": {
+      "additionalProperties": false,
+      "properties": {
+        "decomposition": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "reasoning_method": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "retrieval_method": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "source_class": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "tool": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "verification_method": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "decomposition",
+        "source_class",
+        "retrieval_method",
+        "reasoning_method",
+        "tool",
+        "verification_method"
+      ],
+      "type": "object"
+    },
+    "uncertainties": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "wishes_declared": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "recheck_after": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "statement": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "test": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "would_open": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "statement",
+          "would_open",
+          "test",
+          "recheck_after"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "strategy",
+    "hypothesis",
+    "action",
+    "observation_notes",
+    "interpretation",
+    "uncertainties",
+    "next_step",
+    "outcome",
+    "evidence",
+    "criterion_updates",
+    "contradictions",
+    "contradiction_resolutions",
+    "decisions",
+    "assessment"
+  ],
+  "title": "ADV Loop model output for critic/attempt_review (policy 5.0)",
+  "type": "object"
+}

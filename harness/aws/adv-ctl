@@ -1,0 +1,319 @@
+#!/usr/bin/env bash
+# Mac control for the adv-loop fleet: harness-box (the controller) and adv-gpu-box.
+#   adv-ctl ip                      authorize this Mac's ip on port 22, revoke older adv-ctl rules
+#   adv-ctl start                   ip, start harness-box, point ~/.ssh/config at its new address
+#   adv-ctl stop [--force]          stop the harness unit (which stops the GPU box and bills it), then the box
+#   adv-ctl status                  both instances, adv-harness status, the state files
+#   adv-ctl logs | ui [--ssh]      follow the unit journal | the console here, mirroring the box (or on the box)
+#   adv-ctl drop <dir> [--no-start] stage a goal directory into the inbox through .incoming, then mv
+#   adv-ctl sync-repo [--restart]   rsync this checkout to /srv/adv-loop/repo and pip install -e
+#   adv-ctl pull <ws>               report, derived payload, transcript index, live log, ledgers
+#   adv-ctl gpu status|stop|bootstrap|keygen|authorize-key
+#   adv-ctl wake [--if-due]         start harness-box (only when its cached wake_at has passed)
+# Config: ~/.config/adv-loop/adv-ctl.env with ADV_LOOP_HARNESS_BOX, ADV_LOOP_GPU_BOX, ADV_LOOP_SG,
+# AWS_DEFAULT_REGION, ADV_SSH_HOST (harness-box), ADV_REPO; the environment wins over the file.
+# Needs the aws CLI, ssh, and rsync with openrsync-compatible flags only; sed -i in BSD form.
+set -euo pipefail
+
+CONFIG="${ADV_CTL_CONFIG:-$HOME/.config/adv-loop/adv-ctl.env}"
+if [ -f "$CONFIG" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    line="${line#export }"
+    key="${line%%=*}"
+    value="${line#*=}"
+    value="${value%\"}"; value="${value#\"}"; value="${value%\'}"; value="${value#\'}"
+    case "$key" in *[!A-Za-z0-9_]*|'') continue ;; esac
+    if [ -z "${!key:-}" ]; then export "$key=$value"; fi
+  done < "$CONFIG"
+fi
+
+REGION="${AWS_DEFAULT_REGION:-us-east-2}"
+export AWS_DEFAULT_REGION="$REGION"
+HARNESS_BOX="${ADV_LOOP_HARNESS_BOX:-}"
+GPU_BOX="${ADV_LOOP_GPU_BOX:-}"
+SG="${ADV_LOOP_SG:-}"
+SSH_HOST="${ADV_SSH_HOST:-harness-box}"
+SSH_CONFIG="${ADV_SSH_CONFIG:-$HOME/.ssh/config}"
+VPC_CIDR="${ADV_LOOP_GPU_VPC_CIDR:-172.31.0.0/16}"
+REPO="${ADV_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
+STATE=/srv/adv-loop/state
+VENV=/srv/adv-loop/venv/bin
+CACHE_DIR="${ADV_CTL_CACHE:-$HOME/.config/adv-loop}"
+WAKE_CACHE="$CACHE_DIR/wake_at.json"
+
+die() { echo "adv-ctl: $*" >&2; exit 2; }
+need() { [ -n "${!1:-}" ] || die "set ${2:-$1} in $CONFIG or the environment"; }
+remote() { ssh "$SSH_HOST" ${1+"$@"}; }
+sed_inplace() { if [ "$(uname -s)" = "Darwin" ]; then sed -i '' ${1+"$@"}; else sed -i ${1+"$@"}; fi; }
+instance_state() { aws ec2 describe-instances --instance-ids "$1" --query 'Reservations[0].Instances[0].State.Name' --output text; }
+instance_field() { aws ec2 describe-instances --instance-ids "$1" --query "Reservations[0].Instances[0].$2" --output text; }
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+
+block_has() {
+  awk -v host="$2" -v key="$3" '
+    $1 == "Host" { inblock = ($2 == host) }
+    inblock && $1 == key { found = 1 }
+    END { exit found ? 0 : 1 }' "$1"
+}
+
+rewrite_hostname() {
+  local file="$1" host="$2" ip="$3"
+  [ -n "$ip" ] && [ "$ip" != "None" ] || die "no address to write for $host"
+  if [ ! -f "$file" ]; then
+    mkdir -p "$(dirname "$file")"
+    : > "$file"
+    chmod 0600 "$file"
+  fi
+  if ! grep -q "^Host ${host}\$" "$file"; then
+    printf '\nHost %s\n  HostName %s\n  HostKeyAlias %s\n  User ubuntu\n' "$host" "$ip" "$host" >> "$file"
+    return 0
+  fi
+  if block_has "$file" "$host" HostName; then
+    sed_inplace "/^Host ${host}\$/,/^Host /s|^\([[:space:]]*HostName[[:space:]]\).*|\1${ip}|" "$file"
+  else
+    sed_inplace "/^Host ${host}\$/a\\
+  HostName ${ip}" "$file"
+  fi
+  if ! block_has "$file" "$host" HostKeyAlias; then
+    sed_inplace "/^Host ${host}\$/a\\
+  HostKeyAlias ${host}" "$file"
+  fi
+}
+
+wait_ssh() {
+  local tries=0
+  until ssh -o BatchMode=yes -o ConnectTimeout=5 "$SSH_HOST" true 2>/dev/null; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 60 ] || die "ssh to $SSH_HOST did not come up"
+    sleep 5
+  done
+}
+
+cache_wake() {
+  mkdir -p "$CACHE_DIR"
+  if remote "cat $STATE/wake_at.json" > "$WAKE_CACHE.tmp" 2>/dev/null && [ -s "$WAKE_CACHE.tmp" ]; then
+    mv "$WAKE_CACHE.tmp" "$WAKE_CACHE"
+  else
+    rm -f "$WAKE_CACHE.tmp"
+  fi
+}
+
+cmd_ip() {
+  need SG ADV_LOOP_SG
+  local myip rules rule cidr keep=0
+  myip="$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')"
+  [ -n "$myip" ] || die "could not learn this machine's public address"
+  rules="$(aws ec2 describe-security-group-rules --filters "Name=group-id,Values=$SG" \
+    --query "SecurityGroupRules[?IsEgress==\`false\` && FromPort==\`22\` && Description=='adv-ctl'].[SecurityGroupRuleId,CidrIpv4]" \
+    --output text)"
+  while read -r rule cidr; do
+    [ -n "$rule" ] && [ "$rule" != "None" ] || continue
+    if [ "$cidr" = "$myip/32" ]; then
+      keep=1
+    else
+      aws ec2 revoke-security-group-ingress --group-id "$SG" --security-group-rule-ids "$rule" >/dev/null
+      echo "revoked $cidr"
+    fi
+  done <<< "$rules"
+  if [ "$keep" = "1" ]; then
+    echo "$myip/32 already authorized"
+  else
+    local out
+    if out="$(aws ec2 authorize-security-group-ingress --group-id "$SG" \
+      --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=$myip/32,Description=adv-ctl}]" 2>&1)"; then
+      echo "authorized $myip/32"
+    elif printf '%s' "$out" | grep -q InvalidPermission.Duplicate; then
+      echo "$myip/32 already authorized by another rule"
+    else
+      printf '%s\n' "$out" >&2; return 1
+    fi
+  fi
+}
+
+cmd_start() {
+  need HARNESS_BOX ADV_LOOP_HARNESS_BOX
+  local state ip
+  cmd_ip
+  state="$(instance_state "$HARNESS_BOX")"
+  if [ "$state" = "stopped" ]; then
+    aws ec2 start-instances --instance-ids "$HARNESS_BOX" >/dev/null
+    echo "starting $HARNESS_BOX"
+  fi
+  aws ec2 wait instance-running --instance-ids "$HARNESS_BOX"
+  ip="$(instance_field "$HARNESS_BOX" PublicIpAddress)"
+  rewrite_hostname "$SSH_CONFIG" "$SSH_HOST" "$ip"
+  echo "$SSH_HOST -> $ip"
+  wait_ssh
+  echo "$SSH_HOST is up"
+}
+
+cmd_stop() {
+  need HARNESS_BOX ADV_LOOP_HARNESS_BOX
+  local state gstate
+  if [ "${1:-}" = "--force" ]; then
+    if [ -n "$GPU_BOX" ]; then
+      aws ec2 stop-instances --instance-ids "$GPU_BOX" >/dev/null
+      echo "stopping $GPU_BOX"
+    fi
+    aws ec2 stop-instances --instance-ids "$HARNESS_BOX" >/dev/null
+    echo "stopping $HARNESS_BOX"
+    return 0
+  fi
+  state="$(instance_state "$HARNESS_BOX")"
+  if [ "$state" != "running" ]; then
+    echo "$HARNESS_BOX is $state"
+    return 0
+  fi
+  cache_wake
+  # ExecStopPost of the unit stops the GPU box and records its hours before the controller goes.
+  remote "sudo systemctl stop adv-harness" || echo "systemctl stop adv-harness returned non-zero; continuing" >&2
+  if [ -n "$GPU_BOX" ]; then
+    gstate="$(instance_state "$GPU_BOX")"
+    case "$gstate" in
+      stopped|stopping|terminated) echo "$GPU_BOX is $gstate" ;;
+      *) echo "$GPU_BOX is still $gstate; stopping it directly" >&2
+         aws ec2 stop-instances --instance-ids "$GPU_BOX" >/dev/null ;;
+    esac
+  fi
+  aws ec2 stop-instances --instance-ids "$HARNESS_BOX" >/dev/null
+  echo "stopping $HARNESS_BOX"
+}
+
+cmd_status() {
+  need HARNESS_BOX ADV_LOOP_HARNESS_BOX
+  local ids="$HARNESS_BOX"
+  [ -n "$GPU_BOX" ] && ids="$ids $GPU_BOX"
+  # shellcheck disable=SC2086
+  aws ec2 describe-instances --instance-ids $ids \
+    --query 'Reservations[].Instances[].[Tags[?Key==`Name`]|[0].Value,InstanceId,State.Name,InstanceType,PrivateIpAddress,PublicIpAddress,LaunchTime]' \
+    --output table
+  if [ "$(instance_state "$HARNESS_BOX")" = "running" ]; then
+    remote "$VENV/adv-harness status --root /srv/adv-loop/workspaces --state $STATE" || true
+    remote "for f in gpu-box.json aws-spend.json wake_at.json; do [ -f $STATE/\$f ] && { echo \"== \$f\"; cat $STATE/\$f; }; done; true" || true
+    cache_wake
+  fi
+}
+
+cmd_drop() {
+  local dir="${1:?usage: adv-ctl drop <dir> [--no-start]}" name staging
+  [ -d "$dir" ] || die "$dir is not a directory"
+  name="$(basename "$dir")-$(date -u +%Y%m%dT%H%M%SZ)"
+  if [ "${2:-}" != "--no-start" ]; then
+    cmd_start
+  fi
+  staging="/srv/adv-loop/inbox/.incoming/$name"
+  # dot-prefixed staging is invisible to intake; the mv makes the drop appear whole
+  remote "sudo install -d -o advloop -g advloop /srv/adv-loop/inbox /srv/adv-loop/inbox/.incoming"
+  rsync -a --rsync-path='sudo rsync' "$dir/" "$SSH_HOST:$staging/"
+  remote "sudo chown -R advloop:advloop '$staging' && sudo mv '$staging' '/srv/adv-loop/inbox/$name'"
+  echo "dropped /srv/adv-loop/inbox/$name"
+}
+
+cmd_sync_repo() {
+  [ -f "$REPO/pyproject.toml" ] || die "ADV_REPO=$REPO is not the checkout"
+  rsync -a --delete --exclude-from="$REPO/harness/aws/sync-repo.exclude" --rsync-path='sudo rsync' \
+    "$REPO/" "$SSH_HOST:/srv/adv-loop/repo/"
+  remote "sudo chown -R advloop:advloop /srv/adv-loop/repo && sudo -u advloop $VENV/pip install -q -e /srv/adv-loop/repo"
+  if [ "${1:-}" = "--restart" ]; then
+    remote "sudo systemctl restart adv-harness"
+    echo "restarted adv-harness"
+  fi
+  echo "synced $REPO to $SSH_HOST:/srv/adv-loop/repo"
+}
+
+cmd_pull() {
+  local ws="${1:?usage: adv-ctl pull <workspace-id>}" dest item
+  dest="./workspaces/$ws/pulled"
+  for item in report.md payload/derived transcripts/index.jsonl .harness/live.log .spend.jsonl .gpu-spend.jsonl; do
+    mkdir -p "$dest/$(dirname "$item")"
+    rsync -a "$SSH_HOST:/srv/adv-loop/workspaces/$ws/$item" "$dest/$(dirname "$item")/" 2>/dev/null || echo "no $item" >&2
+  done
+  echo "pulled into $dest"
+}
+
+cmd_gpu() {
+  local sub="${1:-status}" state gip key
+  case "$sub" in
+    status)
+      if [ -n "$GPU_BOX" ]; then
+        aws ec2 describe-instances --instance-ids "$GPU_BOX" \
+          --query 'Reservations[0].Instances[0].[InstanceId,State.Name,InstanceType,PrivateIpAddress,LaunchTime]' --output table
+      fi
+      remote "cat $STATE/gpu-box.json 2>/dev/null || echo 'no gpu-box.json yet'" ;;
+    stop)
+      remote "$VENV/adv-harness gpu stop --state $STATE --reason operator" || echo "adv-harness gpu stop failed" >&2
+      if [ -n "$GPU_BOX" ]; then
+        state="$(instance_state "$GPU_BOX")"
+        case "$state" in
+          running|pending) aws ec2 stop-instances --instance-ids "$GPU_BOX" >/dev/null; echo "stopping $GPU_BOX" ;;
+          *) echo "$GPU_BOX is $state" ;;
+        esac
+      fi ;;
+    bootstrap) remote "$VENV/adv-harness gpu bootstrap --state $STATE" ;;
+    keygen)
+      remote "$VENV/adv-harness gpu keygen --state $STATE"
+      remote "cat $STATE/gpu-box.key.pub" ;;
+    authorize-key)
+      key="$(remote "cat $STATE/gpu-box.key.pub")"
+      echo "$key"
+      gip=""
+      if [ -n "$GPU_BOX" ] && [ "$(instance_state "$GPU_BOX")" = "running" ]; then
+        gip="$(instance_field "$GPU_BOX" PublicIpAddress)"
+      fi
+      if [ -n "$gip" ] && [ "$gip" != "None" ]; then
+        ssh "ubuntu@$gip" "grep -qF '$key' ~/.ssh/authorized_keys || echo 'restrict,from=\"$VPC_CIDR\" $key' >> ~/.ssh/authorized_keys"
+        echo "authorized on $GPU_BOX ($gip)"
+      else
+        echo "the GPU box is not running; pass the line above as GPU_AUTHORIZED_KEY to launch-gpu-box.sh" >&2
+      fi ;;
+    *) usage; exit 2 ;;
+  esac
+}
+
+cmd_wake() {
+  need HARNESS_BOX ADV_LOOP_HARNESS_BOX
+  local wake now state
+  if [ "${1:-}" = "--if-due" ]; then
+    [ -f "$WAKE_CACHE" ] || { echo "no cached wake time"; return 0; }
+    wake="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("wake_at") or "")' "$WAKE_CACHE")"
+    [ -n "$wake" ] || { echo "no wake_at in the cache"; return 0; }
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ "$wake" > "$now" ]]; then
+      echo "wake at $wake, now $now: not due"
+      return 0
+    fi
+  fi
+  state="$(instance_state "$HARNESS_BOX")"
+  if [ "$state" = "stopped" ]; then
+    cmd_start
+    rm -f "$WAKE_CACHE"
+  else
+    echo "$HARNESS_BOX is $state"
+  fi
+}
+
+cmd="${1:-help}"
+if [ $# -gt 0 ]; then shift; fi
+case "$cmd" in
+  ip) cmd_ip ;;
+  start) cmd_start ;;
+  stop) cmd_stop ${1+"$@"} ;;
+  status) cmd_status ;;
+  logs) exec ssh -t "$SSH_HOST" journalctl -u adv-harness -n 200 -f ;;
+  ui)
+    # The local console mirrors the box and sends actions over ssh; --ssh runs the console on the box instead.
+    if [ "${1:-}" = "--ssh" ]; then
+      exec ssh -t "$SSH_HOST" "$VENV/adv-harness ui --root /srv/adv-loop/workspaces --state $STATE --repo /srv/adv-loop/repo"
+    fi
+    cmd_start
+    cd "$REPO" && exec python3 -m harness.cli ui --remote "$SSH_HOST" --repo "$REPO" ${1+"$@"} ;;
+  drop) cmd_drop ${1+"$@"} ;;
+  sync-repo) cmd_sync_repo ${1+"$@"} ;;
+  pull) cmd_pull ${1+"$@"} ;;
+  gpu) cmd_gpu ${1+"$@"} ;;
+  wake) cmd_wake ${1+"$@"} ;;
+  _rewrite-hostname) rewrite_hostname "${1:?file}" "${2:?host}" "${3:?ip}" ;;
+  help|-h|--help) usage ;;
+  *) usage; exit 2 ;;
+esac

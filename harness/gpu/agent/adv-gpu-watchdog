@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Power the GPU box off when nobody is using it; runs as root from adv-gpu-watchdog.timer.
+
+The controller touches /run/adv-gpu/heartbeat on every contact and the job
+runner touches it every 30 seconds while a container runs. An OS poweroff is
+an EC2 stop because the instance was launched with
+`--instance-initiated-shutdown-behavior stop`, so a box the controller lost
+track of costs at most `ADV_GPU_IDLE_MINUTES` more, and no box runs past
+`ADV_GPU_MAX_UPTIME_MINUTES` whatever it is doing. /run is a tmpfs: a fresh
+boot starts with no heartbeat, and the idle window counts from boot.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import os
+import subprocess
+import sys
+import time
+from typing import Dict, Optional
+
+ENV_FILE = os.environ.get("ADV_GPU_WATCHDOG_ENV", "/etc/adv-gpu/env")
+RUN_DIR = os.environ.get("ADV_GPU_RUN_DIR", "/run/adv-gpu")
+LOG_FILE = os.environ.get("ADV_GPU_WATCHDOG_LOG", "/var/log/adv-gpu-watchdog.log")
+DOCKER = os.environ.get("DOCKER", "docker")
+
+
+def should_shutdown(now: float, boot_at: float, heartbeat_at: Optional[float], job_running: bool,
+                    idle_minutes: float = 15, max_uptime_minutes: float = 720) -> Optional[str]:
+    """The reason to power off, or None. The uptime cap wins over a running job; a job holds off idleness."""
+
+    if now - boot_at >= max_uptime_minutes * 60:
+        return "max_uptime"
+    if job_running:
+        return None
+    last_contact = boot_at if heartbeat_at is None else max(boot_at, heartbeat_at)
+    if now - last_contact >= idle_minutes * 60:
+        return "idle"
+    return None
+
+
+def read_env(path: str) -> Dict[str, str]:
+    values: Dict[str, str] = {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                if line.startswith("export "):
+                    line = line[len("export "):]
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip().strip("'\"")
+    except OSError:
+        pass
+    return values
+
+
+def lock_held(path: str) -> bool:
+    try:
+        fd = os.open(path, os.O_RDWR)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return True
+    finally:
+        os.close(fd)
+    return False
+
+
+def containers_running() -> bool:
+    try:
+        done = subprocess.run([DOCKER, "ps", "-q", "--filter", "name=adv-gpu-"], capture_output=True, text=True,
+                              check=False, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return done.returncode == 0 and bool(done.stdout.strip())
+
+
+def main() -> int:
+    env = read_env(ENV_FILE)
+    idle_minutes = float(env.get("ADV_GPU_IDLE_MINUTES", "15"))
+    max_uptime_minutes = float(env.get("ADV_GPU_MAX_UPTIME_MINUTES", "720"))
+    now = time.time()
+    with open("/proc/uptime", "r", encoding="utf-8") as handle:
+        boot_at = now - float(handle.read().split()[0])
+    try:
+        heartbeat_at: Optional[float] = os.stat(os.path.join(RUN_DIR, "heartbeat")).st_mtime
+    except OSError:
+        heartbeat_at = None
+    job_running = lock_held(os.path.join(RUN_DIR, "job.lock")) or containers_running()
+    reason = should_shutdown(now, boot_at, heartbeat_at, job_running, idle_minutes, max_uptime_minutes)
+    if reason is None:
+        return 0
+    line = (f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))} poweroff reason={reason} "
+            f"uptime_s={int(now - boot_at)} heartbeat_age_s={'none' if heartbeat_at is None else int(now - heartbeat_at)} "
+            f"job_running={job_running}\n")
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as handle:
+            handle.write(line)
+    except OSError:
+        pass
+    sys.stderr.write(line)
+    subprocess.run(["systemctl", "poweroff"], check=False)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

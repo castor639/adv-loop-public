@@ -1,0 +1,133 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "contradiction_resolutions": {
+      "maxItems": 0,
+      "type": "array"
+    },
+    "contradictions": {
+      "maxItems": 0,
+      "type": "array"
+    },
+    "criterion_updates": {
+      "maxItems": 0,
+      "type": "array"
+    },
+    "decisions": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "rationale": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "rejected_alternatives": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "decision",
+          "rationale"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "diagnosis": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "enum": [
+            "harness_gap",
+            "research_failure",
+            "human_dependency"
+          ]
+        },
+        "delta_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "fault_signature": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "kill_test": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "next_experiment": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "proposed_delta": {
+          "additionalProperties": false,
+          "properties": {
+            "ops": {
+              "items": {
+                "properties": {
+                  "op": {
+                    "enum": [
+                      "register_evidence_kind",
+                      "register_validator_hook",
+                      "register_sandbox",
+                      "add_stall_class",
+                      "add_role_instructions",
+                      "add_criterion",
+                      "require_min_rank",
+                      "raise_criterion_rank",
+                      "pin_toolchain_hash"
+                    ]
+                  }
+                },
+                "required": [
+                  "op"
+                ],
+                "type": "object"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "schema_version": {
+              "const": 1
+            }
+          },
+          "required": [
+            "schema_version",
+            "ops"
+          ],
+          "type": "object"
+        },
+        "raw_detail": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "raw_detail",
+        "classification",
+        "kill_test",
+        "next_experiment"
+      ],
+      "type": "object"
+    },
+    "evidence": {
+      "maxItems": 0,
+      "type": "array"
+    }
+  },
+  "required": [
+    "diagnosis",
+    "decisions"
+  ],
+  "title": "ADV Loop model output for surgeon/overlay_diagnosis (policy 5.0)",
+  "type": "object"
+}

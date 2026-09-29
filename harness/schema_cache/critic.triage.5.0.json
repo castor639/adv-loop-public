@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "contradiction_resolutions": {
+      "maxItems": 0,
+      "type": "array"
+    },
+    "contradictions": {
+      "maxItems": 0,
+      "type": "array"
+    },
+    "criterion_updates": {
+      "maxItems": 0,
+      "type": "array"
+    },
+    "decisions": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "rationale": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "rejected_alternatives": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "decision",
+          "rationale"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "evidence": {
+      "maxItems": 0,
+      "type": "array"
+    },
+    "triage": {
+      "additionalProperties": false,
+      "properties": {
+        "comparisons": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "candidate_id": {
+                "pattern": "^Q[0-9]{4}$",
+                "type": "string"
+              },
+              "rationale": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "seed_index": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "winner": {
+                "enum": [
+                  "seed",
+                  "candidate"
+                ]
+              }
+            },
+            "required": [
+              "seed_index",
+              "candidate_id",
+              "winner",
+              "rationale"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "target_attempt_id": {
+          "pattern": "^A[0-9]{6}$",
+          "type": "string"
+        },
+        "verdicts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "decision": {
+                "enum": [
+                  "killed",
+                  "promoted"
+                ]
+              },
+              "reason": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "seed_index": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "seed_index",
+              "decision",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "target_attempt_id",
+        "verdicts",
+        "comparisons"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "triage",
+    "decisions"
+  ],
+  "title": "ADV Loop model output for critic/triage (policy 5.0)",
+  "type": "object"
+}

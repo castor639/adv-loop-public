@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Mac side: place the Claude subscription token on harness-box, readable only by advloop.
+#   claude setup-token | adv-token-push harness-box
+# The token never touches the shell history: it is read from stdin and piped over ssh.
+set -euo pipefail
+HOST="${1:?usage: adv-token-push <ssh-host>}"
+TOKEN="$(cat)"
+[ -n "$TOKEN" ] || { echo "no token on stdin"; exit 2; }
+printf '%s\n' "$TOKEN" | ssh "$HOST" 'sudo install -d -m 0750 -o root -g advloop /etc/adv-loop && sudo sh -c "umask 077; cat > /etc/adv-loop/claude-oauth.token" && sudo chown advloop:advloop /etc/adv-loop/claude-oauth.token && sudo chmod 0400 /etc/adv-loop/claude-oauth.token && echo installed'

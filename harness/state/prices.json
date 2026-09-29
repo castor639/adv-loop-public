@@ -1,0 +1,19 @@
+{
+  "note": "USD per million tokens, owner-maintained. A null entry means the price is unknown and API-billed sessions on that model refuse to start. Keys are the routing entry's `model` value, which for Azure is the deployment name. Values are the Azure retail meters for westus3 GlobalStandard read on 2026-09-18 (prices.azure.com): gpt-6-astra and the Grok/DeepSeek lines all have a live meter now. gpt-6-astra doubles to 20/75 above its long-context threshold and that tier is not modelled here, so Astra sessions that run long under-count; the taskbudget clamp is the backstop.",
+  "gpt-6-astra": {
+    "input": 10.0,
+    "output": 50.0
+  },
+  "grok-4-6": {
+    "input": 2.0,
+    "output": 6.0
+  },
+  "deepseek-v4-pro": {
+    "input": 1.74,
+    "output": 3.48
+  },
+  "deepseek-v4-flash": {
+    "input": 0.19,
+    "output": 0.51
+  }
+}

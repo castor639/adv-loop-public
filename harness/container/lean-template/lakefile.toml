@@ -1,0 +1,9 @@
+name = "workspace"
+defaultTargets = ["Workspace"]
+
+[[require]]
+name = "mathlib"
+git = "https://github.com/leanprover-community/mathlib4"
+
+[[lean_lib]]
+name = "Workspace"

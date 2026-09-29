@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""In-container validate client.
+
+    adv-validate <hook> [--input run.json | --json '{...}'] [--timeout SECONDS]
+
+Writes a request into $ADV_LOOP_VALIDATE_DIR and waits for the host broker to
+answer with a verdict file. The checker itself runs on the host side of the
+mount through the kernel's validate_report, which signs the verdict with a key
+this process cannot read. The printed verdict carries a `verdict_id`; cite it
+in the attempt's evidence as `verdict_id`. Exit 0 accepted, 1 rejected, 2 when
+no verdict arrived.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+import uuid
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="adv-validate")
+    parser.add_argument("hook")
+    parser.add_argument("--input", help="path to a JSON file with the checker input")
+    parser.add_argument("--json", help="inline JSON checker input")
+    parser.add_argument("--timeout", type=float, default=float(os.environ.get("ADV_LOOP_VALIDATE_TIMEOUT", "900")))
+    args = parser.parse_args()
+
+    if args.input and args.json:
+        parser.error("give --input or --json, not both")
+    value = None
+    if args.input:
+        with open(args.input, "r", encoding="utf-8") as handle:
+            value = json.load(handle)
+    elif args.json:
+        value = json.loads(args.json)
+
+    directory = os.environ.get("ADV_LOOP_VALIDATE_DIR") or os.path.join(os.getcwd(), ".harness", "validate")
+    os.makedirs(directory, exist_ok=True)
+    request_id = uuid.uuid4().hex
+    request = {
+        "request_id": request_id,
+        "session_id": os.environ.get("ADV_LOOP_SESSION_ID"),
+        "hook": args.hook,
+        "input": value,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    final = os.path.join(directory, f"{request_id}.request.json")
+    temp = final + ".tmp"
+    with open(temp, "w", encoding="utf-8") as handle:
+        json.dump(request, handle, sort_keys=True)
+    os.replace(temp, final)
+
+    verdict_path = os.path.join(directory, f"{request_id}.verdict.json")
+    deadline = time.monotonic() + args.timeout
+    while time.monotonic() < deadline:
+        if os.path.exists(verdict_path):
+            with open(verdict_path, "r", encoding="utf-8") as handle:
+                verdict = json.load(handle)
+            print(json.dumps(verdict, indent=2, sort_keys=True))
+            if not verdict.get("ok"):
+                return 2
+            return 0 if verdict.get("accepted") else 1
+        time.sleep(0.5)
+    print(json.dumps({"ok": False, "request_id": request_id, "error": "no verdict within timeout"}))
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

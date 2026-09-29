@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adv-loop.local/schemas/report.schema.json",
+  "title": "ADV Loop structured final report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "criterion_results", "facts", "inferences", "uncertainties", "limitations", "unresolved_noncritical_contradiction_ids", "next_actions"],
+  "properties": {
+    "summary": {"type": "string", "minLength": 1},
+    "criterion_results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criterion_id", "conclusion", "primary_evidence_ids", "verification_evidence_ids"],
+        "properties": {
+          "criterion_id": {"type": "string"},
+          "conclusion": {"type": "string", "minLength": 1},
+          "primary_evidence_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "verification_evidence_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+        }
+      }
+    },
+    "facts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "evidence_ids"],
+        "properties": {
+          "claim": {"type": "string", "minLength": 1},
+          "evidence_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+        }
+      }
+    },
+    "inferences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "basis_evidence_ids", "confidence"],
+        "properties": {
+          "claim": {"type": "string", "minLength": 1},
+          "basis_evidence_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "confidence": {"enum": ["low", "medium", "high"]}
+        }
+      }
+    },
+    "uncertainties": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "limitations": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "unresolved_noncritical_contradiction_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "next_actions": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}
